@@ -1,14 +1,14 @@
-# treesight — semantic code search
+# askRepo — semantic code search
 
 Ask your codebase questions in plain English and get back the exact functions
 that answer them — not keyword matches, not whole files, but the right *symbol*
 with precise line numbers.
 
 ```
-$ treesight index .
+$ askrepo index .
 Indexed 190 chunks from 42 files (provider=local-hashing(dim=512), dim=512)
 
-$ treesight search "verify a signature and reject tampered data"
+$ askrepo search "verify a signature and reject tampered data"
 
 1. src/itsdangerous/signer.py:227-242   method Signer.verify_signature   0.188
    | def verify_signature(self, value, sig) -> bool:
@@ -27,7 +27,7 @@ The naive version ("embed every 50 lines, do a vector search") fails for two
 reasons this project addresses head-on:
 
 1. **Chunking destroys meaning.** Fixed-size windows slice functions in half,
-   so a hit points you at a fragment with no boundaries. `treesight` parses
+   so a hit points you at a fragment with no boundaries. `askrepo` parses
    **Python with the stdlib `ast` module** to extract each function, method, and
    class as one chunk, with its qualified name (`Class.method`), docstring, and
    exact line span. Other languages use a structural-declaration heuristic with
@@ -47,7 +47,7 @@ reasons this project addresses head-on:
 ## Architecture
 
 ```
-treesight/
+askrepo/
   chunker.py     AST-aware chunking (ast for Python, heuristics elsewhere)
   embeddings.py  Embedder interface + Local / OpenAI / Voyage providers
   index.py       walk repo -> chunk -> embed -> persist vectors + metadata
@@ -55,7 +55,7 @@ treesight/
   cli.py         `index` and `search` subcommands
 ```
 
-The index lives in `<repo>/.treesight_index/` as a numpy vector matrix plus
+The index lives in `<repo>/.askrepo_index/` as a numpy vector matrix plus
 JSON metadata — inspectable, diff-able, no database to run.
 
 ## Install & use
@@ -63,8 +63,8 @@ JSON metadata — inspectable, diff-able, no database to run.
 ```bash
 pip install -r requirements.txt          # just numpy for the local provider
 
-python -m treesight index /path/to/repo
-python -m treesight search "where do we validate webhook payloads" --index /path/to/repo -k 5
+python -m askrepo index /path/to/repo
+python -m askrepo search "where do we validate webhook payloads" --index /path/to/repo -k 5
 ```
 
 ## Real semantic embeddings
@@ -74,7 +74,7 @@ semantic retrieval, switch provider — same pipeline, same commands:
 
 ```bash
 export VOYAGE_API_KEY=...     # voyage-code-3 is purpose-built for code
-python -m treesight index /path/to/repo --provider voyage
+python -m askrepo index /path/to/repo --provider voyage
 ```
 
 `OPENAI_API_KEY` + `--provider openai` works identically. Adding a provider is

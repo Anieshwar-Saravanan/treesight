@@ -6,7 +6,7 @@ to a local model server -- Ollama by default (https://ollama.com), reached over
 its HTTP API at ``localhost:11434`` -- so no API key, network, or data leaves
 the machine. urllib only, matching the dependency-free style of `_APIEmbedder`.
 
-    treesight ask "how are query and index tokens hashed the same way?"
+    askrepo ask "how are query and index tokens hashed the same way?"
 
 The LLM only ever sees the retrieved chunks, and is told to answer strictly
 from them and cite ``path:line`` -- so answers stay grounded in real code.

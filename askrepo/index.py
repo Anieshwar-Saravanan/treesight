@@ -1,6 +1,6 @@
 """Build and persist a searchable index of a repository.
 
-Layout written to ``<repo>/.treesight_index/``:
+Layout written to ``<repo>/.askrepo_index/``:
   - vectors.npy   float32 (n_chunks, dim), L2-normalised
   - chunks.json   chunk metadata + source text
   - meta.json     provider name, dim, idf table (for the local embedder)
@@ -17,11 +17,11 @@ import numpy as np
 from .chunker import chunk_file, language_for, Chunk
 from .embeddings import Embedder, LocalHashingEmbedder, get_embedder
 
-INDEX_DIR = ".treesight_index"
+INDEX_DIR = ".askrepo_index"
 
 _SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
-    ".next", "target", ".treesight_index", ".mypy_cache", ".pytest_cache",
+    ".next", "target", ".askrepo_index", ".mypy_cache", ".pytest_cache",
 }
 _SKIP_EXT = {
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz",

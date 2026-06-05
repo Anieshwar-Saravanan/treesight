@@ -1,4 +1,4 @@
-"""Command-line interface: `python -m treesight index|search ...`."""
+"""Command-line interface: `python -m askrepo index|search|ask ...`."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="treesight",
+        prog="askrepo",
         description="Semantic search over a codebase (AST-aware chunking + vectors).",
     )
     sub = parser.add_subparsers(dest="command", required=True)

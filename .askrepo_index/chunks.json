@@ -1,0 +1,442 @@
+[
+{
+"path": "askrepo/index.py",
+"symbol": "_iter_source_files",
+"kind": "function",
+"start_line": 33,
+"end_line": 47,
+"code": "def _iter_source_files(root: Path):\n    for dirpath, dirnames, filenames in os.walk(root):\n        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]\n        for name in filenames:\n            if any(name.endswith(ext) for ext in _SKIP_EXT):\n                continue\n            path = Path(dirpath) / name\n            if not language_for(str(path)):\n                continue  # code search: skip prose/config/binaries\n            try:\n                if path.stat().st_size > _MAX_BYTES:\n                    continue\n            except OSError:\n                continue\n            yield path",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/index.py",
+"symbol": "build_index",
+"kind": "function",
+"start_line": 50,
+"end_line": 87,
+"code": "def build_index(root: str, provider: str = \"local\", dim: int = 512) -> dict:\n    root_path = Path(root).resolve()\n    embedder: Embedder = get_embedder(provider, dim=dim)\n\n    chunks: list[Chunk] = []\n    for path in _iter_source_files(root_path):\n        try:\n            source = path.read_text(encoding=\"utf-8\")\n        except (UnicodeDecodeError, OSError):\n            continue\n        rel = str(path.relative_to(root_path))\n        chunks.extend(chunk_file(rel, source))\n\n    if not chunks:\n        raise RuntimeError(f\"No source chunks found under {root_path}\")\n\n    embed_texts = [c.embed_text() for c in chunks]\n    embedder.fit(embed_texts)\n    vectors = embedder.encode(embed_texts)\n\n    out_dir = root_path / INDEX_DIR\n    out_dir.mkdir(exist_ok=True)\n    np.save(out_dir / \"vectors.npy\", vectors)\n    (out_dir / \"chunks.json\").write_text(\n        json.dumps([c.to_dict() for c in chunks], indent=0)\n    )\n    meta = {\n        \"provider\": embedder.name,\n        \"provider_key\": provider,\n        \"dim\": int(vectors.shape[1]),\n        \"n_chunks\": len(chunks),\n        \"n_files\": len({c.path for c in chunks}),\n    }\n    if isinstance(embedder, LocalHashingEmbedder):\n        meta[\"idf\"] = embedder._idf\n        meta[\"default_idf\"] = embedder._default_idf\n    (out_dir / \"meta.json\").write_text(json.dumps(meta))\n    return meta",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "Chunk",
+"kind": "class",
+"start_line": 23,
+"end_line": 40,
+"code": "class Chunk:\n    path: str\n    symbol: str          # qualified name, e.g. \"LocalHashingEmbedder.encode\"\n    kind: str            # function | method | class | block\n    start_line: int\n    end_line: int\n    code: str\n    docstring: str = \"\"\n    language: str = \"\"\n\n    def embed_text(self) -> str:\n        \"\"\"What we actually embed: symbol + docstring weighted, then code.\"\"\"\n        symbol_words = self.symbol.replace(\".\", \" \")\n        # repeat the symbol/docstring so identifier intent dominates the vector\n        return f\"{symbol_words}\\n{symbol_words}\\n{self.docstring}\\n{self.code}\"\n\n    def to_dict(self) -> dict:\n        return asdict(self)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "Chunk.embed_text",
+"kind": "method",
+"start_line": 33,
+"end_line": 37,
+"code": "    def embed_text(self) -> str:\n        \"\"\"What we actually embed: symbol + docstring weighted, then code.\"\"\"\n        symbol_words = self.symbol.replace(\".\", \" \")\n        # repeat the symbol/docstring so identifier intent dominates the vector\n        return f\"{symbol_words}\\n{symbol_words}\\n{self.docstring}\\n{self.code}\"",
+"docstring": "What we actually embed: symbol + docstring weighted, then code.",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "Chunk.to_dict",
+"kind": "method",
+"start_line": 39,
+"end_line": 40,
+"code": "    def to_dict(self) -> dict:\n        return asdict(self)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "language_for",
+"kind": "function",
+"start_line": 61,
+"end_line": 65,
+"code": "def language_for(path: str) -> str:\n    for ext, lang in _LANG_BY_EXT.items():\n        if path.endswith(ext):\n            return lang\n    return \"\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "chunk_python",
+"kind": "function",
+"start_line": 68,
+"end_line": 98,
+"code": "def chunk_python(path: str, source: str) -> list[Chunk]:\n    \"\"\"Extract every function, method and class as its own chunk.\"\"\"\n    try:\n        tree = ast.parse(source)\n    except SyntaxError:\n        return chunk_generic(path, source, language=\"python\")\n\n    lines = source.splitlines()\n    chunks: list[Chunk] = []\n\n    def emit(node: ast.AST, qualname: str, kind: str) -> None:\n        start = node.lineno\n        end = getattr(node, \"end_lineno\", start) or start\n        code = \"\\n\".join(lines[start - 1 : end])\n        doc = ast.get_docstring(node) or \"\"  # type: ignore[arg-type]\n        chunks.append(\n            Chunk(path, qualname, kind, start, end, code, doc, \"python\")\n        )\n\n    def walk(node: ast.AST, prefix: str) -> None:\n        for child in ast.iter_child_nodes(node):\n            if isinstance(child, ast.ClassDef):\n                qn = f\"{prefix}{child.name}\"\n                emit(child, qn, \"class\")\n                walk(child, qn + \".\")\n            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):\n                qn = f\"{prefix}{child.name}\"\n                emit(child, qn, \"method\" if prefix else \"function\")\n\n    walk(tree, \"\")\n    return chunks",
+"docstring": "Extract every function, method and class as its own chunk.",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "chunk_generic",
+"kind": "function",
+"start_line": 101,
+"end_line": 144,
+"code": "def chunk_generic(path: str, source: str, language: str = \"\") -> list[Chunk]:\n    \"\"\"Heuristic chunker: split on detected declarations, window the rest.\"\"\"\n    lines = source.splitlines()\n    if not lines:\n        return []\n\n    # find declaration line numbers\n    boundaries: list[tuple[int, str, str]] = []  # (line_idx, kind, name)\n    for i, line in enumerate(lines):\n        m = _DECL_RE.match(line)\n        if m:\n            name = m.group(\"name\") or m.group(\"arrow\") or \"anonymous\"\n            kind = m.group(\"kind\") or \"function\"\n            boundaries.append((i, kind, name))\n\n    chunks: list[Chunk] = []\n    if boundaries:\n        for idx, (start_idx, kind, name) in enumerate(boundaries):\n            end_idx = (\n                boundaries[idx + 1][0] - 1\n                if idx + 1 < len(boundaries)\n                else len(lines) - 1\n            )\n            code = \"\\n\".join(lines[start_idx : end_idx + 1])\n            mapped = \"class\" if kind in {\"class\", \"interface\", \"struct\"} else \"function\"\n            chunks.append(\n                Chunk(path, name, mapped, start_idx + 1, end_idx + 1, code,\n                      language=language or language_for(path))\n            )\n        return chunks\n\n    # no declarations found -> overlapping windows so content is still searchable\n    window, overlap = 40, 10\n    step = window - overlap\n    for start_idx in range(0, len(lines), step):\n        block = lines[start_idx : start_idx + window]\n        if not \"\".join(block).strip():\n            continue\n        chunks.append(\n            Chunk(path, f\"block@{start_idx + 1}\", \"block\", start_idx + 1,\n                  min(start_idx + window, len(lines)), \"\\n\".join(block),\n                  language=language or language_for(path))\n        )\n    return chunks",
+"docstring": "Heuristic chunker: split on detected declarations, window the rest.",
+"language": "python"
+},
+{
+"path": "askrepo/chunker.py",
+"symbol": "chunk_file",
+"kind": "function",
+"start_line": 147,
+"end_line": 150,
+"code": "def chunk_file(path: str, source: str) -> list[Chunk]:\n    if language_for(path) == \"python\":\n        return chunk_python(path, source)\n    return chunk_generic(path, source)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/ask.py",
+"symbol": "Answer",
+"kind": "class",
+"start_line": 38,
+"end_line": 41,
+"code": "class Answer:\n    text: str\n    model: str\n    hits: list[Hit]",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/ask.py",
+"symbol": "_format_context",
+"kind": "function",
+"start_line": 44,
+"end_line": 49,
+"code": "def _format_context(hits: list[Hit]) -> str:\n    blocks = []\n    for h in hits:\n        header = f\"# {h.path}:{h.start_line}-{h.end_line}  ({h.kind} {h.symbol})\"\n        blocks.append(f\"{header}\\n{h.code}\")\n    return \"\\n\\n\".join(blocks)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/ask.py",
+"symbol": "build_prompt",
+"kind": "function",
+"start_line": 52,
+"end_line": 58,
+"code": "def build_prompt(query: str, hits: list[Hit]) -> str:\n    return (\n        f\"Question: {query}\\n\\n\"\n        f\"Code excerpts retrieved from the repository:\\n\\n\"\n        f\"{_format_context(hits)}\\n\\n\"\n        f\"Answer the question using only the excerpts above, citing `path:line`.\"\n    )",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/ask.py",
+"symbol": "_call_ollama",
+"kind": "function",
+"start_line": 61,
+"end_line": 96,
+"code": "def _call_ollama(prompt: str, model: str, host: str) -> str:\n    payload = {\n        \"model\": model,\n        \"stream\": False,\n        \"messages\": [\n            {\"role\": \"system\", \"content\": _SYSTEM},\n            {\"role\": \"user\", \"content\": prompt},\n        ],\n    }\n    req = urllib.request.Request(\n        f\"{host.rstrip('/')}/api/chat\",\n        data=json.dumps(payload).encode(),\n        headers={\"Content-Type\": \"application/json\"},\n    )\n    try:\n        with urllib.request.urlopen(req) as resp:\n            data = json.loads(resp.read())\n    except urllib.error.HTTPError as exc:\n        # Ollama is reachable but returned an error -- surface its actual message.\n        try:\n            detail = json.loads(exc.read()).get(\"error\", \"\")\n        except Exception:\n            detail = \"\"\n        raise RuntimeError(\n            f\"Local LLM at {host} returned HTTP {exc.code}\"\n            + (f\": {detail}\" if detail else \"\")\n            + f\". Check the model `{model}` is pulled (`ollama list`) and that \"\n            \"your Ollama install can actually run it.\"\n        ) from exc\n    except urllib.error.URLError as exc:\n        raise RuntimeError(\n            f\"Could not reach a local LLM at {host} ({exc}). \"\n            f\"Install Ollama (https://ollama.com), then run \"\n            f\"`ollama pull {model}` and make sure `ollama serve` is running.\"\n        ) from exc\n    return data.get(\"message\", {}).get(\"content\", \"\").strip()",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/ask.py",
+"symbol": "ask",
+"kind": "function",
+"start_line": 99,
+"end_line": 110,
+"code": "def ask(\n    query: str,\n    index_root: str = \".\",\n    k: int = 6,\n    model: str = DEFAULT_MODEL,\n    host: str = DEFAULT_HOST,\n) -> Answer:\n    hits = Searcher(index_root).search(query, k=k)\n    if not hits:\n        raise RuntimeError(\"Index returned no chunks to reason over.\")\n    text = _call_ollama(build_prompt(query, hits), model, host)\n    return Answer(text=text, model=model, hits=hits)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "tokenize",
+"kind": "function",
+"start_line": 36,
+"end_line": 52,
+"code": "def tokenize(text: str) -> list[str]:\n    \"\"\"Split text into code-aware subword tokens.\n\n    ``getUserById`` -> ``get user by id``; ``parse_ast_node`` -> ``parse ast\n    node``. The original identifier is kept too, so exact matches still rank.\n    \"\"\"\n    out: list[str] = []\n    for match in _TOKEN_RE.findall(text):\n        ident = match.lower()\n        if len(ident) > 2 and ident not in _STOPWORDS:\n            out.append(ident)\n        # split snake_case and camelCase into subwords\n        for piece in _CAMEL_RE.sub(\" \", match).replace(\"_\", \" \").split():\n            piece = piece.lower()\n            if len(piece) > 2 and piece not in _STOPWORDS and piece != ident:\n                out.append(piece)\n    return out",
+"docstring": "Split text into code-aware subword tokens.\n\n``getUserById`` -> ``get user by id``; ``parse_ast_node`` -> ``parse ast\nnode``. The original identifier is kept too, so exact matches still rank.",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "Embedder",
+"kind": "class",
+"start_line": 55,
+"end_line": 71,
+"code": "class Embedder(ABC):\n    \"\"\"Turn strings into an (n, dim) L2-normalised matrix.\"\"\"\n\n    dim: int\n\n    @abstractmethod\n    def fit(self, corpus: Sequence[str]) -> None:\n        \"\"\"Optional corpus pass (e.g. to learn IDF weights).\"\"\"\n\n    @abstractmethod\n    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        ...\n\n    @property\n    @abstractmethod\n    def name(self) -> str:\n        ...",
+"docstring": "Turn strings into an (n, dim) L2-normalised matrix.",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "Embedder.fit",
+"kind": "method",
+"start_line": 61,
+"end_line": 62,
+"code": "    def fit(self, corpus: Sequence[str]) -> None:\n        \"\"\"Optional corpus pass (e.g. to learn IDF weights).\"\"\"",
+"docstring": "Optional corpus pass (e.g. to learn IDF weights).",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "Embedder.encode",
+"kind": "method",
+"start_line": 65,
+"end_line": 66,
+"code": "    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        ...",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "Embedder.name",
+"kind": "method",
+"start_line": 70,
+"end_line": 71,
+"code": "    def name(self) -> str:\n        ...",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder",
+"kind": "class",
+"start_line": 74,
+"end_line": 127,
+"code": "class LocalHashingEmbedder(Embedder):\n    \"\"\"Hashed TF-IDF over code-aware tokens. No network, no model download.\"\"\"\n\n    def __init__(self, dim: int = 512) -> None:\n        self.dim = dim\n        self._idf: dict[str, float] = {}\n        self._default_idf: float = 1.0\n\n    @property\n    def name(self) -> str:\n        return f\"local-hashing(dim={self.dim})\"\n\n    def fit(self, corpus: Sequence[str]) -> None:\n        n_docs = max(len(corpus), 1)\n        doc_freq: Counter[str] = Counter()\n        for doc in corpus:\n            for tok in set(tokenize(doc)):\n                doc_freq[tok] += 1\n        self._idf = {\n            tok: math.log((n_docs + 1) / (df + 1)) + 1.0\n            for tok, df in doc_freq.items()\n        }\n        # unseen query terms get the IDF of a term seen once\n        self._default_idf = math.log((n_docs + 1) / 1) + 1.0\n\n    @staticmethod\n    def _fnv1a(token: str) -> int:\n        \"\"\"Deterministic 32-bit hash (Python's built-in hash() is salted per\n        process, which would scatter index- and query-time tokens into\n        different buckets).\"\"\"\n        h = 0x811C9DC5\n        for byte in token.encode(\"utf-8\"):\n            h ^= byte\n            h = (h * 0x01000193) & 0xFFFFFFFF\n        return h\n\n    def _hash(self, token: str) -> tuple[int, int]:\n        h = self._fnv1a(token)\n        index = h % self.dim\n        sign = 1 if (h >> 31) & 1 == 0 else -1  # signed hashing reduces collisions\n        return index, sign\n\n    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        vectors = np.zeros((len(texts), self.dim), dtype=np.float32)\n        for row, text in enumerate(texts):\n            counts = Counter(tokenize(text))\n            for tok, tf in counts.items():\n                idf = self._idf.get(tok, self._default_idf)\n                weight = (1.0 + math.log(tf)) * idf  # sublinear tf\n                index, sign = self._hash(tok)\n                vectors[row, index] += sign * weight\n        norms = np.linalg.norm(vectors, axis=1, keepdims=True)\n        norms[norms == 0] = 1.0\n        return vectors / norms",
+"docstring": "Hashed TF-IDF over code-aware tokens. No network, no model download.",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder.__init__",
+"kind": "method",
+"start_line": 77,
+"end_line": 80,
+"code": "    def __init__(self, dim: int = 512) -> None:\n        self.dim = dim\n        self._idf: dict[str, float] = {}\n        self._default_idf: float = 1.0",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder.name",
+"kind": "method",
+"start_line": 83,
+"end_line": 84,
+"code": "    def name(self) -> str:\n        return f\"local-hashing(dim={self.dim})\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder.fit",
+"kind": "method",
+"start_line": 86,
+"end_line": 97,
+"code": "    def fit(self, corpus: Sequence[str]) -> None:\n        n_docs = max(len(corpus), 1)\n        doc_freq: Counter[str] = Counter()\n        for doc in corpus:\n            for tok in set(tokenize(doc)):\n                doc_freq[tok] += 1\n        self._idf = {\n            tok: math.log((n_docs + 1) / (df + 1)) + 1.0\n            for tok, df in doc_freq.items()\n        }\n        # unseen query terms get the IDF of a term seen once\n        self._default_idf = math.log((n_docs + 1) / 1) + 1.0",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder._fnv1a",
+"kind": "method",
+"start_line": 100,
+"end_line": 108,
+"code": "    def _fnv1a(token: str) -> int:\n        \"\"\"Deterministic 32-bit hash (Python's built-in hash() is salted per\n        process, which would scatter index- and query-time tokens into\n        different buckets).\"\"\"\n        h = 0x811C9DC5\n        for byte in token.encode(\"utf-8\"):\n            h ^= byte\n            h = (h * 0x01000193) & 0xFFFFFFFF\n        return h",
+"docstring": "Deterministic 32-bit hash (Python's built-in hash() is salted per\nprocess, which would scatter index- and query-time tokens into\ndifferent buckets).",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder._hash",
+"kind": "method",
+"start_line": 110,
+"end_line": 114,
+"code": "    def _hash(self, token: str) -> tuple[int, int]:\n        h = self._fnv1a(token)\n        index = h % self.dim\n        sign = 1 if (h >> 31) & 1 == 0 else -1  # signed hashing reduces collisions\n        return index, sign",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "LocalHashingEmbedder.encode",
+"kind": "method",
+"start_line": 116,
+"end_line": 127,
+"code": "    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        vectors = np.zeros((len(texts), self.dim), dtype=np.float32)\n        for row, text in enumerate(texts):\n            counts = Counter(tokenize(text))\n            for tok, tf in counts.items():\n                idf = self._idf.get(tok, self._default_idf)\n                weight = (1.0 + math.log(tf)) * idf  # sublinear tf\n                index, sign = self._hash(tok)\n                vectors[row, index] += sign * weight\n        norms = np.linalg.norm(vectors, axis=1, keepdims=True)\n        norms[norms == 0] = 1.0\n        return vectors / norms",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "_APIEmbedder",
+"kind": "class",
+"start_line": 130,
+"end_line": 176,
+"code": "class _APIEmbedder(Embedder):\n    \"\"\"Shared logic for HTTP embedding providers (OpenAI, Voyage, ...).\n\n    Not exercised in the offline demo, but wired up so you can flip to real\n    semantic embeddings with an API key and zero pipeline changes.\n    \"\"\"\n\n    endpoint: str = \"\"\n    model: str = \"\"\n    env_key: str = \"\"\n\n    def __init__(self, model: str | None = None, dim: int = 1536) -> None:\n        self.dim = dim\n        if model:\n            self.model = model\n\n    def fit(self, corpus: Sequence[str]) -> None:  # neural models need no IDF pass\n        return None\n\n    def _payload(self, texts: Sequence[str]) -> dict:\n        return {\"model\": self.model, \"input\": list(texts)}\n\n    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        import json\n        import os\n        import urllib.request\n\n        token = os.environ.get(self.env_key)\n        if not token:\n            raise RuntimeError(\n                f\"{self.name} needs {self.env_key} set in the environment.\"\n            )\n        req = urllib.request.Request(\n            self.endpoint,\n            data=json.dumps(self._payload(texts)).encode(),\n            headers={\n                \"Authorization\": f\"Bearer {token}\",\n                \"Content-Type\": \"application/json\",\n            },\n        )\n        with urllib.request.urlopen(req) as resp:\n            data = json.loads(resp.read())\n        vecs = np.array([row[\"embedding\"] for row in data[\"data\"]], dtype=np.float32)\n        norms = np.linalg.norm(vecs, axis=1, keepdims=True)\n        norms[norms == 0] = 1.0\n        self.dim = vecs.shape[1]\n        return vecs / norms",
+"docstring": "Shared logic for HTTP embedding providers (OpenAI, Voyage, ...).\n\nNot exercised in the offline demo, but wired up so you can flip to real\nsemantic embeddings with an API key and zero pipeline changes.",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "_APIEmbedder.__init__",
+"kind": "method",
+"start_line": 141,
+"end_line": 144,
+"code": "    def __init__(self, model: str | None = None, dim: int = 1536) -> None:\n        self.dim = dim\n        if model:\n            self.model = model",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "_APIEmbedder.fit",
+"kind": "method",
+"start_line": 146,
+"end_line": 147,
+"code": "    def fit(self, corpus: Sequence[str]) -> None:  # neural models need no IDF pass\n        return None",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "_APIEmbedder._payload",
+"kind": "method",
+"start_line": 149,
+"end_line": 150,
+"code": "    def _payload(self, texts: Sequence[str]) -> dict:\n        return {\"model\": self.model, \"input\": list(texts)}",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "_APIEmbedder.encode",
+"kind": "method",
+"start_line": 152,
+"end_line": 176,
+"code": "    def encode(self, texts: Sequence[str]) -> np.ndarray:\n        import json\n        import os\n        import urllib.request\n\n        token = os.environ.get(self.env_key)\n        if not token:\n            raise RuntimeError(\n                f\"{self.name} needs {self.env_key} set in the environment.\"\n            )\n        req = urllib.request.Request(\n            self.endpoint,\n            data=json.dumps(self._payload(texts)).encode(),\n            headers={\n                \"Authorization\": f\"Bearer {token}\",\n                \"Content-Type\": \"application/json\",\n            },\n        )\n        with urllib.request.urlopen(req) as resp:\n            data = json.loads(resp.read())\n        vecs = np.array([row[\"embedding\"] for row in data[\"data\"]], dtype=np.float32)\n        norms = np.linalg.norm(vecs, axis=1, keepdims=True)\n        norms[norms == 0] = 1.0\n        self.dim = vecs.shape[1]\n        return vecs / norms",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "OpenAIEmbedder",
+"kind": "class",
+"start_line": 179,
+"end_line": 186,
+"code": "class OpenAIEmbedder(_APIEmbedder):\n    endpoint = \"https://api.openai.com/v1/embeddings\"\n    model = \"text-embedding-3-small\"\n    env_key = \"OPENAI_API_KEY\"\n\n    @property\n    def name(self) -> str:\n        return f\"openai({self.model})\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "OpenAIEmbedder.name",
+"kind": "method",
+"start_line": 185,
+"end_line": 186,
+"code": "    def name(self) -> str:\n        return f\"openai({self.model})\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "VoyageEmbedder",
+"kind": "class",
+"start_line": 189,
+"end_line": 196,
+"code": "class VoyageEmbedder(_APIEmbedder):\n    endpoint = \"https://api.voyageai.com/v1/embeddings\"\n    model = \"voyage-code-3\"  # purpose-built for code retrieval\n    env_key = \"VOYAGE_API_KEY\"\n\n    @property\n    def name(self) -> str:\n        return f\"voyage({self.model})\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "VoyageEmbedder.name",
+"kind": "method",
+"start_line": 195,
+"end_line": 196,
+"code": "    def name(self) -> str:\n        return f\"voyage({self.model})\"",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/embeddings.py",
+"symbol": "get_embedder",
+"kind": "function",
+"start_line": 199,
+"end_line": 207,
+"code": "def get_embedder(provider: str, dim: int = 512) -> Embedder:\n    provider = provider.lower()\n    if provider == \"local\":\n        return LocalHashingEmbedder(dim=dim)\n    if provider == \"openai\":\n        return OpenAIEmbedder()\n    if provider == \"voyage\":\n        return VoyageEmbedder()\n    raise ValueError(f\"Unknown provider: {provider!r} (use local|openai|voyage)\")",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/cli.py",
+"symbol": "_cmd_index",
+"kind": "function",
+"start_line": 22,
+"end_line": 30,
+"code": "def _cmd_index(args: argparse.Namespace) -> int:\n    print(f\"{DIM}Indexing {args.path} with provider={args.provider}...{RESET}\")\n    meta = build_index(args.path, provider=args.provider, dim=args.dim)\n    print(\n        f\"{GREEN}Indexed {meta['n_chunks']} chunks \"\n        f\"from {meta['n_files']} files{RESET} \"\n        f\"{DIM}(provider={meta['provider']}, dim={meta['dim']}){RESET}\"\n    )\n    return 0",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/cli.py",
+"symbol": "_cmd_search",
+"kind": "function",
+"start_line": 33,
+"end_line": 51,
+"code": "def _cmd_search(args: argparse.Namespace) -> int:\n    searcher = Searcher(args.index)\n    hits = searcher.search(args.query, k=args.k)\n    print(f\"\\n{BOLD}Query:{RESET} {args.query}\\n\")\n    for rank, hit in enumerate(hits, 1):\n        bar = \"#\" * round(hit.score * 20)\n        print(\n            f\"{BOLD}{rank}.{RESET} {CYAN}{hit.path}{RESET}\"\n            f\"{DIM}:{hit.start_line}-{hit.end_line}{RESET}  \"\n            f\"{YELLOW}{hit.kind} {hit.symbol}{RESET}  \"\n            f\"{GREEN}{hit.score:.3f}{RESET} {DIM}{bar}{RESET}\"\n        )\n        snippet = hit.code.splitlines()[: args.lines]\n        for line in snippet:\n            print(f\"   {DIM}|{RESET} {line}\")\n        if len(hit.code.splitlines()) > args.lines:\n            print(f\"   {DIM}| ...{RESET}\")\n        print()\n    return 0",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/cli.py",
+"symbol": "_cmd_ask",
+"kind": "function",
+"start_line": 54,
+"end_line": 65,
+"code": "def _cmd_ask(args: argparse.Namespace) -> int:\n    answer = ask(args.query, index_root=args.index, k=args.k,\n                 model=args.model, host=args.host)\n    print(f\"\\n{BOLD}Q:{RESET} {args.query}\\n\")\n    print(answer.text)\n    print(f\"\\n{DIM}Sources ({answer.model}):{RESET}\")\n    for hit in answer.hits:\n        print(\n            f\"  {CYAN}{hit.path}{RESET}{DIM}:{hit.start_line}-{hit.end_line}{RESET}\"\n            f\"  {YELLOW}{hit.kind} {hit.symbol}{RESET}  {GREEN}{hit.score:.3f}{RESET}\"\n        )\n    return 0",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/cli.py",
+"symbol": "main",
+"kind": "function",
+"start_line": 68,
+"end_line": 107,
+"code": "def main(argv: list[str] | None = None) -> int:\n    parser = argparse.ArgumentParser(\n        prog=\"askrepo\",\n        description=\"Semantic search over a codebase (AST-aware chunking + vectors).\",\n    )\n    sub = parser.add_subparsers(dest=\"command\", required=True)\n\n    p_index = sub.add_parser(\"index\", help=\"build a search index for a repo\")\n    p_index.add_argument(\"path\", help=\"path to the repository root\")\n    p_index.add_argument(\"--provider\", default=\"local\",\n                         choices=[\"local\", \"openai\", \"voyage\"])\n    p_index.add_argument(\"--dim\", type=int, default=512,\n                        help=\"vector dimension for the local embedder\")\n    p_index.set_defaults(func=_cmd_index)\n\n    p_search = sub.add_parser(\"search\", help=\"query an existing index\")\n    p_search.add_argument(\"query\", help=\"natural-language query\")\n    p_search.add_argument(\"--index\", default=\".\", help=\"repo root holding the index\")\n    p_search.add_argument(\"-k\", type=int, default=5, help=\"number of results\")\n    p_search.add_argument(\"--lines\", type=int, default=6,\n                         help=\"snippet lines to show per hit\")\n    p_search.set_defaults(func=_cmd_search)\n\n    p_ask = sub.add_parser(\"ask\", help=\"answer a question with a local LLM (RAG)\")\n    p_ask.add_argument(\"query\", help=\"natural-language question\")\n    p_ask.add_argument(\"--index\", default=\".\", help=\"repo root holding the index\")\n    p_ask.add_argument(\"-k\", type=int, default=6,\n                       help=\"number of chunks to feed the LLM as context\")\n    p_ask.add_argument(\"--model\", default=DEFAULT_MODEL,\n                       help=\"local Ollama model (or set OLLAMA_MODEL)\")\n    p_ask.add_argument(\"--host\", default=DEFAULT_HOST,\n                       help=\"Ollama host URL (or set OLLAMA_HOST)\")\n    p_ask.set_defaults(func=_cmd_ask)\n\n    args = parser.parse_args(argv)\n    try:\n        return args.func(args)\n    except RuntimeError as exc:\n        print(f\"\\033[31merror:\\033[0m {exc}\", file=sys.stderr)\n        return 1",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/search.py",
+"symbol": "Hit",
+"kind": "class",
+"start_line": 16,
+"end_line": 23,
+"code": "class Hit:\n    score: float\n    path: str\n    symbol: str\n    kind: str\n    start_line: int\n    end_line: int\n    code: str",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/search.py",
+"symbol": "Searcher",
+"kind": "class",
+"start_line": 26,
+"end_line": 54,
+"code": "class Searcher:\n    def __init__(self, root: str) -> None:\n        self.dir = Path(root).resolve() / INDEX_DIR\n        if not self.dir.exists():\n            raise RuntimeError(\n                f\"No index at {self.dir}. Run `askrepo index <repo>` first.\"\n            )\n        self.vectors = np.load(self.dir / \"vectors.npy\")\n        self.chunks = json.loads((self.dir / \"chunks.json\").read_text())\n        self.meta = json.loads((self.dir / \"meta.json\").read_text())\n\n        self.embedder = get_embedder(self.meta[\"provider_key\"], dim=self.meta[\"dim\"])\n        if isinstance(self.embedder, LocalHashingEmbedder):\n            # restore the IDF table learned at index time\n            self.embedder._idf = self.meta.get(\"idf\", {})\n            self.embedder._default_idf = self.meta.get(\"default_idf\", 1.0)\n\n    def search(self, query: str, k: int = 5) -> list[Hit]:\n        q = self.embedder.encode([query])[0]\n        scores = self.vectors @ q  # cosine sim (both L2-normalised)\n        top = np.argsort(-scores)[:k]\n        hits = []\n        for i in top:\n            c = self.chunks[int(i)]\n            hits.append(\n                Hit(float(scores[i]), c[\"path\"], c[\"symbol\"], c[\"kind\"],\n                    c[\"start_line\"], c[\"end_line\"], c[\"code\"])\n            )\n        return hits",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/search.py",
+"symbol": "Searcher.__init__",
+"kind": "method",
+"start_line": 27,
+"end_line": 41,
+"code": "    def __init__(self, root: str) -> None:\n        self.dir = Path(root).resolve() / INDEX_DIR\n        if not self.dir.exists():\n            raise RuntimeError(\n                f\"No index at {self.dir}. Run `askrepo index <repo>` first.\"\n            )\n        self.vectors = np.load(self.dir / \"vectors.npy\")\n        self.chunks = json.loads((self.dir / \"chunks.json\").read_text())\n        self.meta = json.loads((self.dir / \"meta.json\").read_text())\n\n        self.embedder = get_embedder(self.meta[\"provider_key\"], dim=self.meta[\"dim\"])\n        if isinstance(self.embedder, LocalHashingEmbedder):\n            # restore the IDF table learned at index time\n            self.embedder._idf = self.meta.get(\"idf\", {})\n            self.embedder._default_idf = self.meta.get(\"default_idf\", 1.0)",
+"docstring": "",
+"language": "python"
+},
+{
+"path": "askrepo/search.py",
+"symbol": "Searcher.search",
+"kind": "method",
+"start_line": 43,
+"end_line": 54,
+"code": "    def search(self, query: str, k: int = 5) -> list[Hit]:\n        q = self.embedder.encode([query])[0]\n        scores = self.vectors @ q  # cosine sim (both L2-normalised)\n        top = np.argsort(-scores)[:k]\n        hits = []\n        for i in top:\n            c = self.chunks[int(i)]\n            hits.append(\n                Hit(float(scores[i]), c[\"path\"], c[\"symbol\"], c[\"kind\"],\n                    c[\"start_line\"], c[\"end_line\"], c[\"code\"])\n            )\n        return hits",
+"docstring": "",
+"language": "python"
+}
+]

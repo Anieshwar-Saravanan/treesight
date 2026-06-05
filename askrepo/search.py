@@ -28,7 +28,7 @@ class Searcher:
         self.dir = Path(root).resolve() / INDEX_DIR
         if not self.dir.exists():
             raise RuntimeError(
-                f"No index at {self.dir}. Run `treesight index <repo>` first."
+                f"No index at {self.dir}. Run `askrepo index <repo>` first."
             )
         self.vectors = np.load(self.dir / "vectors.npy")
         self.chunks = json.loads((self.dir / "chunks.json").read_text())
