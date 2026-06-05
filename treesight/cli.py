@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .ask import DEFAULT_HOST, DEFAULT_MODEL, ask
 from .index import build_index
 from .search import Searcher
 
@@ -50,6 +51,20 @@ def _cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ask(args: argparse.Namespace) -> int:
+    answer = ask(args.query, index_root=args.index, k=args.k,
+                 model=args.model, host=args.host)
+    print(f"\n{BOLD}Q:{RESET} {args.query}\n")
+    print(answer.text)
+    print(f"\n{DIM}Sources ({answer.model}):{RESET}")
+    for hit in answer.hits:
+        print(
+            f"  {CYAN}{hit.path}{RESET}{DIM}:{hit.start_line}-{hit.end_line}{RESET}"
+            f"  {YELLOW}{hit.kind} {hit.symbol}{RESET}  {GREEN}{hit.score:.3f}{RESET}"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="treesight",
@@ -72,6 +87,17 @@ def main(argv: list[str] | None = None) -> int:
     p_search.add_argument("--lines", type=int, default=6,
                          help="snippet lines to show per hit")
     p_search.set_defaults(func=_cmd_search)
+
+    p_ask = sub.add_parser("ask", help="answer a question with a local LLM (RAG)")
+    p_ask.add_argument("query", help="natural-language question")
+    p_ask.add_argument("--index", default=".", help="repo root holding the index")
+    p_ask.add_argument("-k", type=int, default=6,
+                       help="number of chunks to feed the LLM as context")
+    p_ask.add_argument("--model", default=DEFAULT_MODEL,
+                       help="local Ollama model (or set OLLAMA_MODEL)")
+    p_ask.add_argument("--host", default=DEFAULT_HOST,
+                       help="Ollama host URL (or set OLLAMA_HOST)")
+    p_ask.set_defaults(func=_cmd_ask)
 
     args = parser.parse_args(argv)
     try:
