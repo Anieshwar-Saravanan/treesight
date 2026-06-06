@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from .search import Hit, Searcher
 
 DEFAULT_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:3b")
 
 _SYSTEM = (
     "You are a precise code assistant. Answer the question using ONLY the "

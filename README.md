@@ -67,6 +67,17 @@ python -m askrepo index /path/to/repo
 python -m askrepo search "where do we validate webhook payloads" --index /path/to/repo -k 5
 ```
 
+### Point it at a GitHub repo
+
+`index`, `search`, and `ask` accept a GitHub URL anywhere they take a path. The
+repo is shallow-cloned once into `~/.askrepo/repos/` and reused; pass `--refresh`
+to re-pull.
+
+```bash
+python -m askrepo index  https://github.com/pallets/flask
+python -m askrepo ask "how does routing map a URL to a view?" --index https://github.com/pallets/flask
+```
+
 ## Real semantic embeddings
 
 The `local` provider is lexical (great out of the box, no setup). For genuine

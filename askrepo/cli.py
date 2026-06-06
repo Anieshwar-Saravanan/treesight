@@ -8,6 +8,7 @@ import sys
 from .ask import DEFAULT_HOST, DEFAULT_MODEL, ask
 from .index import build_index
 from .search import Searcher
+from .sources import cache_path_for, resolve_source
 
 # ANSI colours (no dependency); disabled automatically when piped.
 _C = sys.stdout.isatty()
@@ -20,8 +21,13 @@ RESET = "\033[0m" if _C else ""
 
 
 def _cmd_index(args: argparse.Namespace) -> int:
-    print(f"{DIM}Indexing {args.path} with provider={args.provider}...{RESET}")
-    meta = build_index(args.path, provider=args.provider, dim=args.dim)
+    cache = cache_path_for(args.path)
+    if cache is not None and (not cache.exists() or args.refresh):
+        verb = "Refreshing" if cache.exists() else "Cloning"
+        print(f"{DIM}{verb} {args.path} -> {cache}...{RESET}")
+    path = resolve_source(args.path, clone=True, refresh=args.refresh)
+    print(f"{DIM}Indexing {path} with provider={args.provider}...{RESET}")
+    meta = build_index(path, provider=args.provider, dim=args.dim)
     print(
         f"{GREEN}Indexed {meta['n_chunks']} chunks "
         f"from {meta['n_files']} files{RESET} "
@@ -31,7 +37,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_search(args: argparse.Namespace) -> int:
-    searcher = Searcher(args.index)
+    searcher = Searcher(resolve_source(args.index, clone=False))
     hits = searcher.search(args.query, k=args.k)
     print(f"\n{BOLD}Query:{RESET} {args.query}\n")
     for rank, hit in enumerate(hits, 1):
@@ -52,8 +58,8 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
-    answer = ask(args.query, index_root=args.index, k=args.k,
-                 model=args.model, host=args.host)
+    answer = ask(args.query, index_root=resolve_source(args.index, clone=False),
+                 k=args.k, model=args.model, host=args.host)
     print(f"\n{BOLD}Q:{RESET} {args.query}\n")
     print(answer.text)
     print(f"\n{DIM}Sources ({answer.model}):{RESET}")
@@ -73,16 +79,19 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_index = sub.add_parser("index", help="build a search index for a repo")
-    p_index.add_argument("path", help="path to the repository root")
+    p_index.add_argument("path", help="local repo path or a GitHub URL")
     p_index.add_argument("--provider", default="local",
                          choices=["local", "openai", "voyage"])
     p_index.add_argument("--dim", type=int, default=512,
                         help="vector dimension for the local embedder")
+    p_index.add_argument("--refresh", action="store_true",
+                        help="re-pull a cached GitHub clone before indexing")
     p_index.set_defaults(func=_cmd_index)
 
     p_search = sub.add_parser("search", help="query an existing index")
     p_search.add_argument("query", help="natural-language query")
-    p_search.add_argument("--index", default=".", help="repo root holding the index")
+    p_search.add_argument("--index", default=".",
+                         help="indexed repo path, or the GitHub URL you indexed")
     p_search.add_argument("-k", type=int, default=5, help="number of results")
     p_search.add_argument("--lines", type=int, default=6,
                          help="snippet lines to show per hit")
@@ -90,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ask = sub.add_parser("ask", help="answer a question with a local LLM (RAG)")
     p_ask.add_argument("query", help="natural-language question")
-    p_ask.add_argument("--index", default=".", help="repo root holding the index")
+    p_ask.add_argument("--index", default=".",
+                       help="indexed repo path, or the GitHub URL you indexed")
     p_ask.add_argument("-k", type=int, default=6,
                        help="number of chunks to feed the LLM as context")
     p_ask.add_argument("--model", default=DEFAULT_MODEL,
